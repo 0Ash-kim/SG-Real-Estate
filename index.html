@@ -85,6 +85,8 @@ self.addEventListener('fetch', e => {
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css">
     <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <!-- 카카오맵 SDK (지오코딩용) -->
+    <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=cbdd3eda92116bbe4c417d91fccce3a4&libraries=services&autoload=false"></script>
     <style>
         :root {
             --primary-blue: #004A99;
@@ -2178,8 +2180,6 @@ self.addEventListener('fetch', e => {
     let vwMarkers = [];
     let _clusterPopup = null;
     const _geocodeCache = {};
-    const KAKAO_REST_KEY = '408636d2512ad12afcd4dd329e5904b8';
-
     function initVwMap() {
         if (vwMap) { renderVwMarkers(); return; }
         vwMap = L.map('map-view', { zoomControl: true }).setView([37.5665, 126.9780], 12);
@@ -2207,41 +2207,47 @@ self.addEventListener('fetch', e => {
         renderVwMarkers();
     }
 
-    // 카카오 REST API 지오코딩 (한국 주소 정확도 높음)
+    // 카카오 SDK 지오코딩 (JavaScript 키 사용)
+    let _kakaoGeocoder = null;
+
+    function getGeocoder() {
+        if (_kakaoGeocoder) return Promise.resolve(_kakaoGeocoder);
+        return new Promise((resolve) => {
+            kakao.maps.load(() => {
+                _kakaoGeocoder = new kakao.maps.services.Geocoder();
+                resolve(_kakaoGeocoder);
+            });
+        });
+    }
+
     async function geocodeVworld(addr) {
         if (!addr) return null;
         const clean = addr.replace(/\(.*?\)/g, '').replace(/\s{2,}/g, ' ').trim();
         if (_geocodeCache[clean]) return _geocodeCache[clean];
 
-        const tryKakao = async (q) => {
-            try {
-                const res = await fetch(
-                    `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(q)}&size=1`,
-                    { headers: { 'Authorization': `KakaoAK ${KAKAO_REST_KEY}` } }
-                );
-                const data = await res.json();
-                if (data.documents && data.documents.length > 0) {
-                    return { lat: parseFloat(data.documents[0].y), lng: parseFloat(data.documents[0].x) };
-                }
-            } catch(e) {}
-            try {
-                const res2 = await fetch(
-                    `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(q)}&size=1`,
-                    { headers: { 'Authorization': `KakaoAK ${KAKAO_REST_KEY}` } }
-                );
-                const data2 = await res2.json();
-                if (data2.documents && data2.documents.length > 0) {
-                    return { lat: parseFloat(data2.documents[0].y), lng: parseFloat(data2.documents[0].x) };
-                }
-            } catch(e) {}
-            return null;
-        };
+        const geocoder = await getGeocoder();
 
-        let coords = await tryKakao(clean);
+        const trySearch = (q) => new Promise(resolve => {
+            geocoder.addressSearch(q, (result, status) => {
+                if (status === kakao.maps.services.Status.OK && result.length > 0) {
+                    return resolve({ lat: parseFloat(result[0].y), lng: parseFloat(result[0].x) });
+                }
+                // 키워드 검색 폴백
+                const ps = new kakao.maps.services.Places();
+                ps.keywordSearch(q, (res2, st2) => {
+                    if (st2 === kakao.maps.services.Status.OK && res2.length > 0) {
+                        resolve({ lat: parseFloat(res2[0].y), lng: parseFloat(res2[0].x) });
+                    } else {
+                        resolve(null);
+                    }
+                });
+            });
+        });
+
+        let coords = await trySearch(clean);
         if (!coords) {
-            // 상세주소 제거 후 재시도
             const simplified = clean.replace(/\s+\d+동$|\s+\d+호$|\s+\d+층.*$/, '').trim();
-            if (simplified !== clean) coords = await tryKakao(simplified);
+            if (simplified !== clean) coords = await trySearch(simplified);
         }
         if (coords && coords.lat >= 33 && coords.lat <= 39 && coords.lng >= 124 && coords.lng <= 132) {
             _geocodeCache[clean] = coords;
