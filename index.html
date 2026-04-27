@@ -160,7 +160,7 @@ self.addEventListener('fetch', e => {
         /* --- 상단 네비게이션 --- */
         nav { background: var(--primary-blue); padding: 0 30px; height: 80px; display: flex; align-items: center; color: white; z-index: 1000; position: relative; }
         .nav-logo-wrapper { height: 100%; display: flex; align-items: center; padding: 0; }
-        .nav-logo-img { height: 70px; width: auto; max-width: 320px; cursor: pointer; object-fit: contain; display: block; }
+        .nav-logo-img { height: 70px; width: auto; max-width: 320px; cursor: pointer; object-fit: contain; display: block; mix-blend-mode: screen; filter: brightness(1.1); }
         
         .category-tabs { position: absolute; left: 50%; transform: translateX(-50%); display: flex; gap: 12px; }
         .tab { padding: 10px 22px; border-radius: 25px; cursor: pointer; font-size: 15px; font-weight: 600; color: rgba(255,255,255,0.7); transition: 0.3s; }
