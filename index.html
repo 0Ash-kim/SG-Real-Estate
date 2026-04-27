@@ -158,19 +158,19 @@ self.addEventListener('fetch', e => {
         .start-btn:hover { background: var(--accent-blue); transform: translateY(-3px); }
 
         /* --- 상단 네비게이션 --- */
-        nav { background: var(--primary-blue); padding: 0 30px; height: 80px; display: flex; align-items: center; color: white; z-index: 1000; position: relative; }
+        nav { background: white; padding: 0 30px; height: 80px; display: flex; align-items: center; color: var(--primary-blue); z-index: 1000; position: relative; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
         .nav-logo-wrapper { height: 100%; display: flex; align-items: center; padding: 0; }
-        .nav-logo-img { height: 70px; width: auto; max-width: 320px; cursor: pointer; object-fit: contain; display: block; mix-blend-mode: screen; filter: brightness(1.1); }
+        .nav-logo-img { height: 70px; width: auto; max-width: 320px; cursor: pointer; object-fit: contain; display: block; }
         
         .category-tabs { position: absolute; left: 50%; transform: translateX(-50%); display: flex; gap: 12px; }
-        .tab { padding: 10px 22px; border-radius: 25px; cursor: pointer; font-size: 15px; font-weight: 600; color: rgba(255,255,255,0.7); transition: 0.3s; }
-        .tab.active { background: white; color: var(--primary-blue); }
+        .tab { padding: 10px 22px; border-radius: 25px; cursor: pointer; font-size: 15px; font-weight: 600; color: rgba(0,74,153,0.5); transition: 0.3s; }
+        .tab.active { background: var(--primary-blue); color: white; }
         
         .nav-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
         .btn-register { background: var(--accent-blue); color: white; border:none; padding: 12px 24px; border-radius: 10px; font-weight: 700; cursor: pointer; display: none; }
-        .btn-login-trigger { background: rgba(255,255,255,0.2); border: 1px solid white; color: white; padding: 8px 15px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+        .btn-login-trigger { background: var(--primary-blue); border: 1px solid var(--primary-blue); color: white; padding: 8px 15px; border-radius: 8px; cursor: pointer; font-size: 13px; }
         .btn-admin-manage { background: #ffcc00; color: #333; border: none; padding: 8px 15px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: bold; display: none; }
-        .btn-my-info { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 8px 15px; border-radius: 8px; cursor: pointer; font-size: 13px; display: none; }
+        .btn-my-info { background: white; border: 1px solid var(--primary-blue); color: var(--primary-blue); padding: 8px 15px; border-radius: 8px; cursor: pointer; font-size: 13px; display: none; }
 
         /* ── 프로필 드롭다운 ── */
         .profile-wrap { position: relative; display: none; align-items: center; }
