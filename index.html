@@ -79,7 +79,13 @@ self.addEventListener('fetch', e => {
 
     <script src="https://t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js"></script>
     <!-- 카카오맵 SDK -->
-    <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=cbdd3eda92116bbe4c417d91fccce3a4&libraries=services"></script>
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Leaflet MarkerCluster -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css">
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
     <style>
         :root {
             --primary-blue: #004A99;
@@ -714,7 +720,14 @@ self.addEventListener('fetch', e => {
         .filter-active-dot { width:8px; height:8px; border-radius:50%; background:#e74c3c; display:inline-block; margin-left:6px; vertical-align:middle; }
 
         /* 카카오맵 커스텀 오버레이 팝업 */
-        .kakao-popup { background:white; border-radius:12px; overflow:hidden; box-shadow:0 8px 28px rgba(0,0,0,0.18); font-family:sans-serif; }
+        /* Leaflet 팝업 */
+        .vw-popup .leaflet-popup-content-wrapper { padding:0; border-radius:12px; overflow:hidden; box-shadow:0 8px 28px rgba(0,0,0,0.18); border:none; }
+        .vw-popup .leaflet-popup-content { margin:0; width:auto !important; }
+        .vw-popup .leaflet-popup-tip { display:none; }
+        .vw-popup .leaflet-popup-tip-container { display:none; }
+        .leaflet-container { font-family: 'Pretendard', sans-serif; }
+        .marker-cluster-small, .marker-cluster-medium, .marker-cluster-large { background-color: rgba(0,74,153,0.2) !important; }
+        .marker-cluster-small div, .marker-cluster-medium div, .marker-cluster-large div { background-color: rgba(0,74,153,0.85) !important; color:white !important; font-weight:800 !important; }
     </style>
 </head>
 <body>
@@ -2148,54 +2161,72 @@ self.addEventListener('fetch', e => {
     renderItems();
 
     /* ══════════════════════════
-       🗺️ 카카오맵
+       🗺️ VWorld + Leaflet 지도
     ══════════════════════════ */
     function getDealColor(t) { return t==='매매'?'#e67e22':t==='전세'?'#27ae60':'#e74c3c'; }
 
     let vwMap = null;
-    let vwMarkers = [];      // CustomOverlay 배열
-    let _openOverlay = null; // 현재 열린 팝업 오버레이
+    let _clusterGroup = null;
+    let vwMarkers = [];
+    let _clusterPopup = null;
     const _geocodeCache = {};
-    const _geocoder = { _inst: null, get() { if(!this._inst) this._inst = new kakao.maps.services.Geocoder(); return this._inst; } };
+    const KAKAO_REST_KEY = '408636d2512ad12afcd4dd329e5904b8';
 
     function initVwMap() {
         if (vwMap) { renderVwMarkers(); return; }
-        const container = document.getElementById('map-view');
-        vwMap = new kakao.maps.Map(container, {
-            center: new kakao.maps.LatLng(37.5665, 126.9780),
-            level: 7
+        vwMap = L.map('map-view', { zoomControl: true }).setView([37.5665, 126.9780], 12);
+        L.tileLayer('https://xdworld.vworld.kr/2d/Base/service/{z}/{x}/{y}.png', {
+            attribution: '© <a href="https://www.vworld.kr" target="_blank">VWorld</a>',
+            maxZoom: 19, minZoom: 6
+        }).addTo(vwMap);
+        _clusterGroup = L.markerClusterGroup({
+            maxClusterRadius: 60,
+            iconCreateFunction: function(cluster) {
+                const count = cluster.getChildCount();
+                return L.divIcon({
+                    html: `<div style="background:#004A99;color:white;width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:900;box-shadow:0 4px 14px rgba(0,74,153,0.4);border:3px solid white;">${count}</div>`,
+                    className: '', iconSize: [44,44], iconAnchor: [22,22]
+                });
+            },
+            spiderfyOnMaxZoom: true, showCoverageOnHover: false, zoomToBoundsOnClick: true
         });
-        // 지도 클릭 시 팝업 닫기
-        kakao.maps.event.addListener(vwMap, 'click', () => {
-            if (_openOverlay) { _openOverlay.setMap(null); _openOverlay = null; }
-        });
+        vwMap.addLayer(_clusterGroup);
+        setTimeout(() => vwMap.invalidateSize(), 200);
         renderVwMarkers();
     }
 
-    // 카카오 SDK Geocoder
+    // 카카오 REST API 지오코딩
     async function geocodeVworld(addr) {
         if (!addr) return null;
         const clean = addr.replace(/\(.*?\)/g, '').replace(/\s{2,}/g, ' ').trim();
         if (_geocodeCache[clean]) return _geocodeCache[clean];
 
-        const trySearch = (q) => new Promise(resolve => {
-            _geocoder.get().addressSearch(q, (result, status) => {
-                if (status === kakao.maps.services.Status.OK && result.length > 0) {
-                    return resolve({ lat: parseFloat(result[0].y), lng: parseFloat(result[0].x) });
-                }
-                const ps = new kakao.maps.services.Places();
-                ps.keywordSearch(q, (res2, st2) => {
-                    resolve(st2 === kakao.maps.services.Status.OK && res2.length > 0
-                        ? { lat: parseFloat(res2[0].y), lng: parseFloat(res2[0].x) }
-                        : null);
-                });
-            });
-        });
+        const tryKakao = async (q) => {
+            try {
+                const res = await fetch(
+                    `https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(q)}&size=1`,
+                    { headers: { 'Authorization': `KakaoAK ${KAKAO_REST_KEY}` } }
+                );
+                const data = await res.json();
+                if (data.documents && data.documents.length > 0)
+                    return { lat: parseFloat(data.documents[0].y), lng: parseFloat(data.documents[0].x) };
+            } catch(e) {}
+            try {
+                const res2 = await fetch(
+                    `https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(q)}&size=1`,
+                    { headers: { 'Authorization': `KakaoAK ${KAKAO_REST_KEY}` } }
+                );
+                const data2 = await res2.json();
+                if (data2.documents && data2.documents.length > 0)
+                    return { lat: parseFloat(data2.documents[0].y), lng: parseFloat(data2.documents[0].x) };
+            } catch(e) {}
+            return null;
+        };
 
-        let coords = await trySearch(clean);
+        let coords = await tryKakao(clean);
         if (!coords) {
             const simplified = clean.replace(/\s+\d+동$|\s+\d+호$|\s+\d+층.*$/, '').trim();
-            if (simplified !== clean) coords = await trySearch(simplified);
+            if (simplified !== clean) coords = await tryKakao(simplified);
         }
         if (coords && coords.lat >= 33 && coords.lat <= 39 && coords.lng >= 124 && coords.lng <= 132) {
             _geocodeCache[clean] = coords;
@@ -2204,27 +2235,29 @@ self.addEventListener('fetch', e => {
         return null;
     }
 
-    function makeLabelHtml(item) {
+    function makeVwIcon(item) {
         const color = item.is_sold ? '#999' : getDealColor(item.dealType);
         const priceLabel = item.dealType==='월세'
             ? `${Number(item.price).toLocaleString()}/${Number(item.rent).toLocaleString()}만`
             : `${Number(item.price).toLocaleString()}만`;
-        return `<div style="background:${color};color:white;padding:5px 11px;border-radius:20px;font-size:12px;font-weight:800;white-space:nowrap;box-shadow:0 3px 10px rgba(0,0,0,0.25);border:2px solid rgba(255,255,255,0.85);cursor:pointer;${item.is_sold?'opacity:.65;':''}position:relative;">
-            ${item.dealType} ${priceLabel}
-            <div style="position:absolute;bottom:-7px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid ${color};"></div>
-        </div>`;
+        return L.divIcon({
+            html: `<div style="background:${color};color:white;padding:5px 11px;border-radius:20px;font-size:12px;font-weight:800;white-space:nowrap;box-shadow:0 3px 10px rgba(0,0,0,0.25);border:2px solid rgba(255,255,255,0.85);position:relative;${item.is_sold?'opacity:.65;':''}">
+                ${item.dealType} ${priceLabel}
+                <div style="position:absolute;bottom:-7px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid ${color};"></div>
+            </div>`,
+            className: '', iconAnchor: [0, 36], popupAnchor: [60, -40]
+        });
     }
 
-    function makePopupHtml(item) {
+    function makeVwPopup(item) {
         const color = getDealColor(item.dealType);
         const priceText = item.dealType==='월세'
             ? `보증 ${Number(item.price).toLocaleString()}만 / 월 ${Number(item.rent).toLocaleString()}만`
             : `${Number(item.price).toLocaleString()}만원`;
         const imgHtml = item.imgs&&item.imgs[0]
-            ? `<img src="${item.imgs[0]}" style="width:100%;height:100px;object-fit:cover;">`
-            : `<div style="width:100%;height:55px;display:flex;align-items:center;justify-content:center;font-size:26px;background:#f4f7f9;">🏠</div>`;
-        return `<div style="width:220px;background:white;border-radius:12px;overflow:hidden;box-shadow:0 8px 28px rgba(0,0,0,0.2);font-family:sans-serif;position:relative;">
-            <button onclick="window._closeOverlay()" style="position:absolute;top:6px;right:6px;z-index:10;background:rgba(0,0,0,0.35);color:white;border:none;border-radius:50%;width:22px;height:22px;font-size:12px;cursor:pointer;">✕</button>
+            ? `<img src="${item.imgs[0]}" style="width:100%;height:100px;object-fit:cover;border-radius:8px 8px 0 0;">`
+            : `<div style="width:100%;height:55px;display:flex;align-items:center;justify-content:center;font-size:26px;background:#f4f7f9;border-radius:8px 8px 0 0;">🏠</div>`;
+        return `<div style="width:210px;margin:-14px -20px -14px;font-family:sans-serif;">
             ${imgHtml}
             <div style="padding:10px 12px;">
                 <div style="display:flex;gap:4px;margin-bottom:5px;flex-wrap:wrap;">
@@ -2237,16 +2270,14 @@ self.addEventListener('fetch', e => {
                 <div style="font-size:11px;color:#666;margin-bottom:8px;">전용 ${item.area_exclusive}㎡(${(item.area_exclusive*0.3025).toFixed(1)}평) · ${item.floor_current}/${item.floor_total}층</div>
                 <button onclick="window._vwDetail('${item.id}')" style="width:100%;padding:8px;background:#004A99;color:white;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">상세 보기 →</button>
             </div>
-            <div style="position:absolute;bottom:-10px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:8px solid transparent;border-right:8px solid transparent;border-top:10px solid white;"></div>
         </div>`;
     }
 
     async function renderVwMarkers() {
         if (!vwMap) return;
-        // 기존 오버레이 전부 제거
-        vwMarkers.forEach(o => o.setMap(null));
+        if (_clusterGroup) _clusterGroup.clearLayers();
         vwMarkers = [];
-        if (_openOverlay) { _openOverlay.setMap(null); _openOverlay = null; }
+        if (_clusterPopup) { _clusterPopup.remove(); _clusterPopup = null; }
 
         const fType = document.getElementById('f-type') ? document.getElementById('f-type').value : '전체';
         const fStatus = document.getElementById('f-status') ? document.getElementById('f-status').value : '전체';
@@ -2270,7 +2301,7 @@ self.addEventListener('fetch', e => {
         if (mapContainer) { mapContainer.style.position = 'relative'; mapContainer.appendChild(loadingDiv); }
 
         const coordMap = {};
-        const boundsArr = [];
+        const bounds = [];
         let done = 0;
 
         for (const item of list) {
@@ -2280,135 +2311,101 @@ self.addEventListener('fetch', e => {
             if (loadingDiv.parentNode) loadingDiv.textContent = `📍 매물 위치 불러오는 중... (${done}/${list.length})`;
             if (!coords) continue;
             const key = `${coords.lat.toFixed(4)},${coords.lng.toFixed(4)}`;
-            if (!coordMap[key]) { coordMap[key] = { coords, items: [] }; boundsArr.push(new kakao.maps.LatLng(coords.lat, coords.lng)); }
+            if (!coordMap[key]) { coordMap[key] = { coords, items: [] }; bounds.push([coords.lat, coords.lng]); }
             coordMap[key].items.push(item);
         }
 
         if (loadingDiv.parentNode) loadingDiv.parentNode.removeChild(loadingDiv);
-
         if (Object.keys(coordMap).length === 0) return;
-
-        window._closeOverlay = () => { if (_openOverlay) { _openOverlay.setMap(null); _openOverlay = null; } };
 
         for (const key of Object.keys(coordMap)) {
             const { coords, items } = coordMap[key];
             const count = items.length;
-            const pos = new kakao.maps.LatLng(coords.lat, coords.lng);
 
-            // 라벨 오버레이 (마커)
-            const labelHtml = count === 1
-                ? makeLabelHtml(items[0])
-                : `<div style="background:#004A99;color:white;padding:5px 11px;border-radius:20px;font-size:12px;font-weight:800;white-space:nowrap;box-shadow:0 3px 10px rgba(0,0,0,0.25);border:2px solid rgba(255,255,255,0.85);cursor:pointer;position:relative;">
-                    🏠 ${count}건
-                    <div style="position:absolute;bottom:-7px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid #004A99;"></div>
-                  </div>`;
-
-            const labelOverlay = new kakao.maps.CustomOverlay({
-                position: pos,
-                content: labelHtml,
-                yAnchor: 1.4,
-                zIndex: 3
-            });
-            labelOverlay.setMap(vwMap);
-            vwMarkers.push(labelOverlay);
-
-            // 클릭 이벤트 (DOM 삽입 후 연결)
-            setTimeout(() => {
-                const node = labelOverlay.a;
-                if (!node) return;
-                node.style.cursor = 'pointer';
-                node.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    if (_openOverlay) { _openOverlay.setMap(null); _openOverlay = null; }
-
-                    let popupHtml;
-                    if (count === 1) {
-                        popupHtml = makePopupHtml(items[0]);
-                    } else {
-                        const listHtml = items.map(item => {
-                            const c = getDealColor(item.dealType);
-                            const priceText = item.dealType==='월세'
-                                ? `보증 ${Number(item.price).toLocaleString()}만 / 월 ${Number(item.rent).toLocaleString()}만`
-                                : `${Number(item.price).toLocaleString()}만원`;
-                            return `<div onclick="window._vwDetail('${item.id}')" style="display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid #f0f2f6;cursor:pointer;" onmouseover="this.style.background='#f0f5ff'" onmouseout="this.style.background='white'">
-                                <div style="width:48px;height:48px;border-radius:8px;overflow:hidden;flex-shrink:0;background:#f4f7f9;display:flex;align-items:center;justify-content:center;font-size:20px;">
-                                    ${item.imgs&&item.imgs[0]?`<img src="${item.imgs[0]}" style="width:100%;height:100%;object-fit:cover;">`:'🏠'}
-                                </div>
-                                <div style="flex:1;min-width:0;">
-                                    <div style="display:flex;gap:4px;margin-bottom:3px;flex-wrap:wrap;">
-                                        <span style="background:${c};color:white;font-size:10px;font-weight:800;padding:1px 7px;border-radius:8px;">${item.dealType}</span>
-                                        <span style="background:#e8f0fb;color:#004A99;font-size:10px;font-weight:800;padding:1px 7px;border-radius:8px;">${item.category}</span>
-                                        ${item.is_sold?'<span style="background:#ffe0e0;color:#c0392b;font-size:10px;padding:1px 7px;border-radius:8px;">완료</span>':''}
-                                    </div>
-                                    <div style="font-size:13px;font-weight:800;color:#111;">${priceText}</div>
-                                    <div style="font-size:11px;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.address}</div>
-                                </div>
-                            </div>`;
-                        }).join('');
-                        popupHtml = `<div style="width:280px;background:white;border-radius:12px;overflow:hidden;box-shadow:0 8px 28px rgba(0,0,0,0.2);font-family:sans-serif;">
-                            <div style="padding:12px 14px;background:#004A99;color:white;font-weight:800;font-size:13px;display:flex;justify-content:space-between;align-items:center;">
-                                <span>📍 이 위치의 매물 ${count}건</span>
-                                <button onclick="window._closeOverlay()" style="background:rgba(255,255,255,0.25);color:white;border:none;border-radius:50%;width:20px;height:20px;font-size:11px;cursor:pointer;">✕</button>
-                            </div>
-                            <div style="max-height:320px;overflow-y:auto;">${listHtml}</div>
-                        </div>`;
-                    }
-
-                    const popup = new kakao.maps.CustomOverlay({
-                        position: pos,
-                        content: popupHtml,
-                        yAnchor: 1.5,
-                        zIndex: 10
-                    });
-                    popup.setMap(vwMap);
-                    _openOverlay = popup;
+            if (count === 1) {
+                const marker = L.marker([coords.lat, coords.lng], { icon: makeVwIcon(items[0]) });
+                marker.bindPopup(makeVwPopup(items[0]), { maxWidth: 230, className: 'vw-popup' });
+                _clusterGroup.addLayer(marker);
+                vwMarkers.push(marker);
+            } else {
+                const color = '#e67e22';
+                const icon = L.divIcon({
+                    html: `<div style="position:relative;background:${color};color:white;padding:5px 11px;border-radius:20px;font-size:12px;font-weight:800;white-space:nowrap;box-shadow:0 3px 10px rgba(0,0,0,0.25);border:2px solid rgba(255,255,255,0.85);">
+                        🏠 ${count}건
+                        <div style="position:absolute;bottom:-7px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid ${color};"></div>
+                    </div>`,
+                    className: '', iconAnchor: [0, 36], popupAnchor: [60, -40]
                 });
-            }, 100);
+                const marker = L.marker([coords.lat, coords.lng], { icon });
+                marker.on('click', function() {
+                    if (_clusterPopup) { _clusterPopup.remove(); _clusterPopup = null; }
+                    const listHtml = items.map(it => {
+                        const c = getDealColor(it.dealType);
+                        const pt = it.dealType==='월세'
+                            ? `보증 ${Number(it.price).toLocaleString()}만 / 월 ${Number(it.rent).toLocaleString()}만`
+                            : `${Number(it.price).toLocaleString()}만원`;
+                        return `<div onclick="window._vwDetail('${it.id}')" style="display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid #f0f2f6;cursor:pointer;" onmouseover="this.style.background='#f0f5ff'" onmouseout="this.style.background='white'">
+                            <div style="width:48px;height:48px;border-radius:8px;overflow:hidden;flex-shrink:0;background:#f4f7f9;display:flex;align-items:center;justify-content:center;font-size:20px;">
+                                ${it.imgs&&it.imgs[0]?`<img src="${it.imgs[0]}" style="width:100%;height:100%;object-fit:cover;">`:'🏠'}
+                            </div>
+                            <div style="flex:1;min-width:0;">
+                                <div style="display:flex;gap:4px;margin-bottom:3px;">
+                                    <span style="background:${c};color:white;font-size:10px;font-weight:800;padding:1px 7px;border-radius:8px;">${it.dealType}</span>
+                                    <span style="background:#e8f0fb;color:#004A99;font-size:10px;font-weight:800;padding:1px 7px;border-radius:8px;">${it.category}</span>
+                                    ${it.is_sold?'<span style="background:#ffe0e0;color:#c0392b;font-size:10px;padding:1px 7px;border-radius:8px;">완료</span>':''}
+                                </div>
+                                <div style="font-size:13px;font-weight:800;color:#111;">${pt}</div>
+                                <div style="font-size:11px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${it.address}</div>
+                            </div>
+                        </div>`;
+                    }).join('');
+                    _clusterPopup = L.popup({ maxWidth: 300, className: 'vw-popup', closeButton: true })
+                        .setLatLng([coords.lat, coords.lng])
+                        .setContent(`<div style="font-family:sans-serif;margin:-14px -20px -14px;">
+                            <div style="padding:12px 14px;background:#004A99;color:white;font-weight:800;font-size:13px;border-radius:12px 12px 0 0;">📍 이 위치의 매물 ${count}건</div>
+                            <div style="max-height:320px;overflow-y:auto;">${listHtml}</div>
+                        </div>`)
+                        .openOn(vwMap);
+                });
+                _clusterGroup.addLayer(marker);
+                vwMarkers.push(marker);
+            }
         }
 
-        // 지도 범위 조정
-        if (boundsArr.length === 1) {
-            vwMap.setCenter(boundsArr[0]);
-            vwMap.setLevel(3);
-        } else if (boundsArr.length > 1) {
-            const bounds = new kakao.maps.LatLngBounds();
-            boundsArr.forEach(b => bounds.extend(b));
-            vwMap.setBounds(bounds, 60);
-        }
+        if (bounds.length === 1) vwMap.setView(bounds[0], 17);
+        else if (bounds.length > 1) vwMap.fitBounds(bounds, { padding: [50, 50] });
     }
 
     window._vwDetail = (id) => { const item = properties.find(p=>p.id===id); if(item) showDetail(item); };
 
-    // 상세 미니 지도 (카카오맵)
+    // 상세 미니 지도 (VWorld)
     window.renderDetailMiniMap = async function(addr) {
         const el = document.getElementById('detail-mini-map');
         if (!el) return;
         el.innerHTML = `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#f4f7f9;border-radius:12px;font-size:13px;color:#888;">📍 지도 불러오는 중...</div>`;
-
         const coords = await geocodeVworld(addr);
         if (!coords) {
             el.innerHTML = `<div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#f4f7f9;border-radius:12px;gap:8px;">
-                <div style="font-size:20px;">📍</div>
-                <div style="font-size:13px;color:#aaa;">${addr}</div>
+                <div style="font-size:20px;">📍</div><div style="font-size:13px;color:#aaa;">${addr}</div>
             </div>`;
             return;
         }
-
         el.innerHTML = '';
         try {
-            const mini = new kakao.maps.Map(el, {
-                center: new kakao.maps.LatLng(coords.lat, coords.lng),
-                level: 3
+            const mini = L.map(el, { zoomControl: true, dragging: true, scrollWheelZoom: false })
+                .setView([coords.lat, coords.lng], 16);
+            L.tileLayer('https://xdworld.vworld.kr/2d/Base/service/{z}/{x}/{y}.png', {
+                attribution: '© VWorld', maxZoom: 19
+            }).addTo(mini);
+            const pin = L.divIcon({
+                html: `<div style="background:#e74c3c;width:18px;height:18px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);"></div>`,
+                className: '', iconAnchor: [9,18], popupAnchor: [0,-20]
             });
-            const markerImg = new kakao.maps.MarkerImage(
-                'https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/markerStar.png',
-                new kakao.maps.Size(24, 35)
-            );
-            new kakao.maps.Marker({
-                position: new kakao.maps.LatLng(coords.lat, coords.lng),
-                map: mini,
-                image: markerImg
-            });
+            L.marker([coords.lat, coords.lng], { icon: pin })
+                .addTo(mini)
+                .bindPopup(`<div style="font-size:12px;font-weight:700;white-space:nowrap;padding:2px 4px;">📍 ${addr}</div>`, { closeButton: false })
+                .openPopup();
+            setTimeout(() => mini.invalidateSize(), 150);
         } catch(e) {
             el.innerHTML = `<div style="padding:20px;text-align:center;color:#aaa;font-size:13px;">지도를 불러올 수 없습니다</div>`;
         }
@@ -2417,7 +2414,7 @@ self.addEventListener('fetch', e => {
     const _origSwitchView = switchView;
     window.switchView = function(mode) {
         _origSwitchView(mode);
-        if (mode === 'map') setTimeout(() => { if (!vwMap) initVwMap(); else { kakao.maps.event.trigger(vwMap, 'resize'); renderVwMarkers(); } }, 150);
+        if (mode === 'map') setTimeout(() => { if (!vwMap) initVwMap(); else { vwMap.invalidateSize(); renderVwMarkers(); } }, 150);
     };
 
     window.addEventListener('load', () => setTimeout(initVwMap, 300));
